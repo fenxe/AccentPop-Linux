@@ -18,6 +18,30 @@ or character codes.
 - Default configuration files are generated automatically on first launch.
 - Existing user configuration is preserved.
 - Designed for Hyprland.
+- -----------------------
+<table>
+  <tr>
+    <td align="center">
+      <img src="screenshots/screen0c.png"
+           alt="AccentPop accent selector"
+           width="300">
+    </td>
+    <td align="center">
+      <img src="screenshots/screen1c.png"
+           alt="AccentPop accent selector"
+           width="300">
+    </td>
+  </tr>
+</table>
+
+## Usage
+- Long press a key, example A to show popup
+- Cycle around the accent by pressing key A
+- Long press key A to select your desired accent
+- Alternatively, you can use mouse select-click, ENTER/SPACE/ARROW keys.
+- Popup can be cancelled by pressing ESC key, or other keys
+### Pro-tips
+- When using SHIFT + long click A, release SHIFT to get lowercase accent based on CAPSLOCK_OFF status, you can still get uppercase by mouse select-click, ENTER/SPACE/ARROW keys.
 
 ## Requirements
 
@@ -84,6 +108,9 @@ Run:
 Replace USERNAME with the GitHub account or organization hosting the
 repository.
 
+## TODO
+...
+
 ## License
 
-AccentPop is distributed under the MIT License. See LICENSE.
+AccentPop is distributed under the MIT License. See [LICENSE](license).
