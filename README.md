@@ -107,6 +107,8 @@ Run:
 
 Replace USERNAME with the GitHub account or organization hosting the
 repository.
+--------------
+You can see permanent installation steps [here](install_it.md)
 
 ## TODO
 ...
