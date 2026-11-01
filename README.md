@@ -1,3 +1,5 @@
+
+```
 # AccentPop
 
 AccentPop is a lightweight keyboard accent selector for Linux, written in Rust
@@ -18,6 +20,12 @@ or character codes.
 - Default configuration files are generated automatically on first launch.
 - Existing user configuration is preserved.
 - Designed for Hyprland.
+<img src="screenshots/screen0c.png"
+     alt="AccentPop accent selector - select text"
+     width="600">
+<img src="screenshots/screen1c.png"
+     alt="AccentPop accent selector - write text"
+     width="600">
 
 ## Requirements
 
@@ -70,7 +78,7 @@ Install the required build dependencies on Arch Linux:
 
 Clone the repository:
 
-    git clone https://github.com/fenxe/AccentPop-Linux.git
+    git clone https://github.com/USERNAME/accentpop.git
     cd accentpop
 
 Build:
@@ -86,4 +94,5 @@ repository.
 
 ## License
 
-AccentPop is distributed under the MIT License. See LICENSE.
+AccentPop is distributed under the MIT License. See [LICENSE](README.md).
+```
