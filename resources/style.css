@@ -1,0 +1,29 @@
+window {
+    background: #20232d;
+    color: #ffffff;
+    border: 1px solid #454b5c;
+    border-radius: 16px;
+}
+
+.heading {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.accent-button {
+    background: #343a49;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 22px;
+    border: none;
+}
+
+.accent-button.accent-selected {
+    background: #515c76;
+    border: 2px solid #a8b8e8;
+}
+
+.accent-button:hover {
+    background: #515c76;
+}

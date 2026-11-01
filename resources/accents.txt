@@ -1,0 +1,22 @@
+# AccentHold configuration
+# Format: key = character1, character2, character3
+
+# Letters
+a = á, à, â, ä, ã
+e = é, è, ê, ë
+i = í, ì, î, ï
+o = ó, ò, ô, ö, õ
+u = ü, ú, ù, û
+c = ç
+n = ñ
+
+# Numbers
+1 = ¹, ₁, ½, ⅓
+2 = ², ₂, ⅔
+3 = ³, ₃, ¾
+4 = ⁴, ₄
+5 = ⁵, ₅, $, ₹, €, £, ¥, ₩, ₽, ₣, ₺, ₫, ₦
+6 = ⁶, ₆
+7 = ⁷, ₇
+8 = ⁸, ₈
+9 = ⁹, ₉

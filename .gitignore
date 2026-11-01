@@ -1,0 +1,15 @@
+# Rust build output
+/target/
+
+# Local packages
+*.pkg.tar.zst
+*.pkg.tar.xz
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# IDE and editor files
+.vscode/
+.idea/
