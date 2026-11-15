@@ -9,6 +9,7 @@ or character codes.
 
 ## Features
 
+- Small trace: **0.0** to max **0.2%** CPU | max >**15MB** RAM
 - Hold a configured key to open an accent selection popup.
 - Select characters using the keyboard or mouse.
 - Navigate available characters with the keyboard.
@@ -39,9 +40,9 @@ or character codes.
 - Cycle around the accent by pressing key A
 - Long press key A to select your desired accent
 - Alternatively, you can use mouse select-click, ENTER/SPACE/ARROW keys.
-- Popup can be cancelled by pressing ESC key, or other keys
-### Pro-tips
-- When using SHIFT + long click A, release SHIFT to get lowercase accent based on CAPSLOCK_OFF status, you can still get uppercase by mouse select-click, ENTER/SPACE/ARROW keys.
+- Popup can be cancelled by pressing ESC key, or other keys and out-of-focus mouse click
+> [!TIP]
+> When using SHIFT + long click A, release SHIFT to get lowercase accent based on CAPSLOCK_OFF status, you can still get uppercase by mouse select-click, ENTER/SPACE/ARROW keys.
 
 ## Requirements
 
@@ -70,17 +71,16 @@ It generates two default files:
 - accents.txt
 - style.css
 
-### accents.txt
+> [!IMPORTANT]
+>### accents.txt
 
 Defines the keys that trigger the accent selector and the characters
 available for each key.
-
 You can edit this file to customize your accent and symbol mappings.
 
-### style.css
+>### style.css
 
 Controls the appearance of the accent selection popup.
-
 You can customize its colors, spacing, buttons, and other supported GTK CSS
 properties.
 
@@ -111,6 +111,8 @@ repository.
 You can see permanent installation steps [here](install_it.md)
 
 ## TODO
+- [ ]  Terminal help section
+- [ ]  More themes
 ...
 
 ## License
