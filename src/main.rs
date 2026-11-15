@@ -1,6 +1,6 @@
 
 use evdev::{
-    AttributeSet, Device, EventSummary, EventType, InputEvent, KeyCode,
+    AttributeSet, Device, EventSummary, EventType, InputEvent, KeyCode, LedCode,
     uinput::VirtualDevice,
 };
 use gtk4 as gtk;
@@ -9,16 +9,57 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use glib_unix::{unix_fd_add_local, unix_signal_add_local};
 
 use directories::BaseDirs;
+use notify::{EventKind, RecursiveMode, Watcher};
+use input::{
+    event::{
+        Event,
+        EventTrait,
+        device::DeviceEvent,
+        pointer::{ButtonState, PointerEvent},
+    },
+    Libinput,
+    LibinputInterface,
+};
 
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs,
-    os::fd::AsRawFd,
+    fs::{self, File, OpenOptions},
+    os::fd::{AsRawFd, OwnedFd},
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
     process::Command,
     rc::Rc,
     time::{Duration, Instant},
 };
+
+struct Interface;
+
+impl LibinputInterface for Interface {
+    fn open_restricted(
+        &mut self,
+        path: &Path,
+        flags: i32,
+    ) -> Result<OwnedFd, i32> {
+        OpenOptions::new()
+            .custom_flags(flags)
+            .read(
+                (flags & libc::O_ACCMODE == libc::O_RDONLY)
+                    || (flags & libc::O_ACCMODE == libc::O_RDWR),
+            )
+            .write(
+                (flags & libc::O_ACCMODE == libc::O_WRONLY)
+                    || (flags & libc::O_ACCMODE == libc::O_RDWR),
+            )
+            .open(path)
+            .map(|file| file.into())
+            .map_err(|error| error.raw_os_error().unwrap_or(libc::EIO))
+    }
+
+    fn close_restricted(&mut self, fd: OwnedFd) {
+        drop(File::from(fd));
+    }
+}
 
 const HOLD_TIME: Duration = Duration::from_millis(450);
 //test
@@ -38,6 +79,7 @@ struct Candidate {
 struct AppState {
     physical: Device,
     virtual_device: VirtualDevice,
+    popup_rect: Option<(i32, i32, i32, i32)>,
     window: gtk::ApplicationWindow,
     title: gtk::Label,
     characters: gtk::Box,
@@ -55,6 +97,7 @@ ctrl_pressed: bool,
 alt_pressed: bool,
 super_pressed: bool,
     next_token: u64,
+    config_watcher: Option<notify::RecommendedWatcher>,
 }
 
 fn keycode_from_char(character: char) -> Option<KeyCode> {
@@ -110,15 +153,16 @@ fn find_keyboard() -> Result<Device, String> {
         let lower_name = name.to_lowercase();
 
         if lower_name.contains("virtual")
-            || lower_name.contains("mouse")
-            || lower_name.contains("touchpad")
-            || lower_name.contains("hotkey")
-            || lower_name.contains("button")
-            || lower_name.contains("video")
-            || lower_name.contains("wmi")
-        {
-            continue;
-        }
+    || lower_name.contains("mouse")
+    || lower_name.contains("touchpad")
+    || lower_name.contains("hotkey")
+    || lower_name.contains("button")
+    || lower_name.contains("video")
+    || lower_name.contains("wmi")
+    || lower_name.contains("asustek tuf gaming m5")
+{
+    continue;
+}
 
         let Some(keys) = device.supported_keys() else {
             continue;
@@ -150,7 +194,7 @@ fn find_keyboard() -> Result<Device, String> {
     Err("No suitable physical keyboard found.".to_string())
 }
 
-fn config_dir() -> std::path::PathBuf {
+  fn config_dir() -> std::path::PathBuf {
     let base_dirs = BaseDirs::new()
         .expect("Could not determine user directories");
 
@@ -185,18 +229,13 @@ fn ensure_config_files() -> std::path::PathBuf {
     dir
 }
 
-fn load_accents() -> HashMap<KeyCode, Vec<String>> {
+fn load_accents() -> Result<HashMap<KeyCode, Vec<String>>, String> {
+    let accents_path = ensure_config_files().join("accents.txt");
+
+    let contents = fs::read_to_string(&accents_path)
+        .map_err(|error| format!("Could not read accents.txt: {error}"))?;
+
     let mut accents = HashMap::new();
-
-let accents_path = ensure_config_files().join("accents.txt");
-
-let contents = match fs::read_to_string(&accents_path) {
-        Ok(contents) => contents,
-        Err(error) => {
-            eprintln!("Could not load accents.txt: {error}");
-            return accents;
-        }
-    };
 
     for (line_number, line) in contents.lines().enumerate() {
         let line = line.trim();
@@ -206,24 +245,24 @@ let contents = match fs::read_to_string(&accents_path) {
         }
 
         let Some((key_text, values_text)) = line.split_once('=') else {
-            eprintln!("Invalid configuration at line {}", line_number + 1);
-            continue;
+            return Err(format!(
+                "Invalid configuration at line {}: missing '='",
+                line_number + 1
+            ));
         };
 
         let mut key_chars = key_text.trim().chars();
 
         let Some(character) = key_chars.next() else {
-            continue;
+            return Err(format!("Missing key at line {}", line_number + 1));
         };
 
         if key_chars.next().is_some() {
-            eprintln!("Invalid key at line {}", line_number + 1);
-            continue;
+            return Err(format!("Invalid key at line {}", line_number + 1));
         }
 
         let Some(key) = keycode_from_char(character) else {
-            eprintln!("Unsupported key at line {}", line_number + 1);
-            continue;
+            return Err(format!("Unsupported key at line {}", line_number + 1));
         };
 
         let values: Vec<String> = values_text
@@ -233,14 +272,21 @@ let contents = match fs::read_to_string(&accents_path) {
             .map(String::from)
             .collect();
 
-        if !values.is_empty() {
-            accents.insert(key, values);
+        if values.is_empty() {
+            return Err(format!(
+                "No accent characters defined at line {}",
+                line_number + 1
+            ));
         }
+
+        accents.insert(key, values);
     }
 
-    println!("Loaded {} accent key definitions.", accents.len());
+    if accents.is_empty() {
+        return Err("No accent definitions found.".to_string());
+    }
 
-    accents
+    Ok(accents)
 }
 
 fn is_accent_key(state: &AppState, key: KeyCode) -> bool {
@@ -334,8 +380,6 @@ let key_name = key_debug.strip_prefix("KEY_").unwrap_or("?");
 
 title.set_text(&format!("Choose an accent key for {}", key_name));
 
-title.set_text(&format!("Choose an accent key for {}", key_name));
-
 let accent_list = state
     .borrow()
     .accents
@@ -421,9 +465,45 @@ if let Some((monitor, geometry)) =
     }
     .clamp(0, screen_height - popup_height);
 
-    window.set_monitor(Some(&monitor));
-    window.set_margin(Edge::Left, popup_x);
-    window.set_margin(Edge::Top, popup_y);
+let popup_global_x = geometry.x() + popup_x;
+let popup_global_y = geometry.y() + popup_y;
+
+// Temporary initial rectangle until GTK reports actual dimensions.
+state.borrow_mut().popup_rect = Some((
+    popup_global_x,
+    popup_global_y,
+    popup_width,
+    popup_height,
+));
+
+window.set_monitor(Some(&monitor));
+window.set_margin(Edge::Left, popup_x);
+window.set_margin(Edge::Top, popup_y);
+
+// Update the hit-test rectangle after GTK allocates the window.
+let rect_state = state.clone();
+let rect_window = window.clone();
+
+gtk::glib::timeout_add_local_once(
+    Duration::from_millis(100),
+    move || {
+        let actual_width = rect_window.width();
+        let actual_height = rect_window.height();
+
+        if actual_width > 0 && actual_height > 0 {
+            let mut state = rect_state.borrow_mut();
+
+            if state.popup_token == Some(token) {
+                state.popup_rect = Some((
+                    popup_global_x,
+                    popup_global_y,
+                    actual_width,
+                    actual_height,
+                ));
+            }
+        }
+    },
+);
 } else {
     eprintln!("Could not detect a monitor for the popup.");
 }
@@ -480,6 +560,25 @@ fn main() {
     let app = gtk::Application::builder()
         .application_id("io.accentpop")
         .build();
+		
+		// give version info
+		    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!("AccentPop {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("AccentPop {}", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("Usage: accentpop [OPTIONS]");
+        println!();
+        println!("Options:");
+        println!("  -V, --version    Show version information");
+        println!("  -h, --help       Show this help message");
+        return;
+    }
 
     app.connect_activate(|app| {
         // Open the physical keyboard.
@@ -495,13 +594,51 @@ let physical = find_keyboard()
             }
         }
 
-        let virtual_device = VirtualDevice::builder()
-            .expect("Could not create virtual keyboard")
-            .name("AccentPop Virtual Keyboard")
-            .with_keys(&keys)
-            .expect("Could not configure virtual keyboard")
-            .build()
-            .expect("Could not start virtual keyboard");
+// Copy the physical keyboard's supported LED capabilities.
+let mut leds = AttributeSet::<LedCode>::new();
+
+if let Some(supported) = physical.supported_leds() {
+    for led in supported.iter() {
+        leds.insert(led);
+    }
+}
+
+let virtual_device = VirtualDevice::builder()
+    .expect("Could not create virtual keyboard")
+    .name("AccentPop Virtual Keyboard")
+    .with_keys(&keys)
+    .expect("Could not configure virtual keyboard keys")
+    .with_leds(&leds)
+    .expect("Could not configure virtual keyboard LEDs")
+    .build()
+    .expect("Could not start virtual keyboard");
+
+// Allow the GTK event loop to read LED feedback without blocking.
+let virtual_fd = virtual_device.as_raw_fd();
+
+let fd_flags = unsafe {
+    libc::fcntl(virtual_fd, libc::F_GETFL)
+};
+
+if fd_flags == -1 {
+    panic!(
+        "Could not get virtual keyboard flags: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+if unsafe {
+    libc::fcntl(
+        virtual_fd,
+        libc::F_SETFL,
+        fd_flags | libc::O_NONBLOCK,
+    )
+} == -1 {
+    panic!(
+        "Could not set virtual keyboard nonblocking: {}",
+        std::io::Error::last_os_error()
+    );
+}
 
         physical
             .set_nonblocking(true)
@@ -560,10 +697,11 @@ window.set_keyboard_mode(KeyboardMode::None);
         window.set_child(Some(&container));
 
         // Initialize shared application state.
-        let state = Rc::new(RefCell::new(AppState {
-            physical,
-            virtual_device,
-            window: window.clone(),
+let state = Rc::new(RefCell::new(AppState {
+    physical,
+    virtual_device,
+    popup_rect: None,
+    window: window.clone(),
             title,
             characters,
             candidate: None,
@@ -573,14 +711,93 @@ popup_suppressed_key: None,
 popup_key: None,
 highlighted: 0,
 accent_buttons: Vec::new(),
-            accents: load_accents(),
+                        accents: load_accents().unwrap_or_else(|error| {
+                eprintln!("Could not load accent configuration: {error}");
+                HashMap::new()
+            }),
             shift_pressed: false,
 ctrl_pressed: false,
 alt_pressed: false,
 super_pressed: false,
             caps_lock: false,
             next_token: 0,
+			            config_watcher: None,
         }));
+		
+		        // Watch accents.txt for live configuration changes.
+        let (reload_sender, reload_receiver) = async_channel::unbounded::<()>();
+
+        let mut config_watcher = notify::recommended_watcher(
+            move |result: notify::Result<notify::Event>| {
+                match result {
+                                        Ok(event) => {
+                        // Ignore access events caused by reading the file.
+                        let is_file_change = matches!(
+                            event.kind,
+                            EventKind::Create(_) | EventKind::Modify(_)
+                        );
+
+                        if !is_file_change {
+                            return;
+                        }
+
+                        let accents_changed = event.paths.iter().any(|path| {
+                            path.file_name().is_some_and(|name| {
+                                name == std::ffi::OsStr::new("accents.txt")
+                            })
+                        });
+
+                        if accents_changed {
+                            let _ = reload_sender.send_blocking(());
+                        }
+                    }
+
+                    Err(error) => {
+                        eprintln!("Accent configuration watcher error: {error}");
+                    }
+                }
+            },
+        )
+        .expect("Could not initialize accent configuration watcher");
+
+        if let Err(error) =
+            config_watcher.watch(&config_dir(), RecursiveMode::NonRecursive)
+        {
+            eprintln!("Could not watch AccentPop configuration directory: {error}");
+        }
+
+        state.borrow_mut().config_watcher = Some(config_watcher);
+
+        // Reload on GTK's main thread, with a short debounce.
+        let reload_state = state.clone();
+
+        gtk::glib::MainContext::default().spawn_local(async move {
+            while reload_receiver.recv().await.is_ok() {
+                // Allow multiple filesystem events from one save to settle.
+                gtk::glib::timeout_future(Duration::from_millis(250)).await;
+
+                // Discard duplicate events received during the debounce.
+                while reload_receiver.try_recv().is_ok() {}
+
+                match load_accents() {
+                    Ok(accents) => {
+                        let count = accents.len();
+                        reload_state.borrow_mut().accents = accents;
+
+                        println!(
+                            "Accent configuration reloaded: {} key definitions.",
+                            count
+                        );
+                    }
+
+                    Err(error) => {
+                        eprintln!(
+                            "Keeping previous accent configuration: {error}"
+                        );
+                    }
+                }
+            }
+        });
 
         // Grab the physical keyboard only after the virtual
         // keyboard and UI have been initialized.
@@ -1007,6 +1224,182 @@ match action {
             },
         );
 
+        // Listen for LED feedback from the compositor/kernel.
+        let virtual_fd = state.borrow().virtual_device.as_raw_fd();
+        let led_state = state.clone();
+
+        unix_fd_add_local(
+            virtual_fd,
+            gtk::glib::IOCondition::IN
+                | gtk::glib::IOCondition::HUP
+                | gtk::glib::IOCondition::ERR,
+            move |_, _| {
+                let led_result = {
+                    let mut state = led_state.borrow_mut();
+
+                    state.virtual_device.fetch_events().map(|events| {
+                        events
+                            .filter_map(|event| {
+                                if let EventSummary::Led(_, led, value) =
+                                    event.destructure()
+                                {
+                                    Some((led, value))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                };
+
+                let led_changes = match led_result {
+                    Ok(events) => events,
+
+                    Err(error)
+                        if error.kind()
+                            == std::io::ErrorKind::WouldBlock =>
+                    {
+                        return gtk::glib::ControlFlow::Continue;
+                    }
+
+                    Err(error) => {
+                        eprintln!("Virtual keyboard LED error: {error}");
+                        return gtk::glib::ControlFlow::Break;
+                    }
+                };
+
+                if !led_changes.is_empty() {
+                    let events: Vec<InputEvent> = led_changes
+                        .iter()
+                        .map(|(led, value)| {
+                            InputEvent::new(
+                                EventType::LED.0,
+                                led.0,
+                                *value,
+                            )
+                        })
+                        .collect();
+
+                    if let Err(error) =
+                        led_state.borrow_mut().physical.send_events(&events)
+                    {
+                        eprintln!("Physical keyboard LED error: {error}");
+                    }
+                }
+
+                gtk::glib::ControlFlow::Continue
+            },
+        );
+
+        let pointer_state = state.clone();
+    // Monitor pointer clicks through libinput, including touchpad tap-to-click.
+let mut libinput = Libinput::new_with_udev(Interface);
+
+if libinput.udev_assign_seat("seat0").is_err() {
+    eprintln!("Could not assign libinput to seat0. Outside-click detection disabled.");
+} else {
+    let libinput = Rc::new(RefCell::new(libinput));
+    let input_fd = libinput.borrow().as_raw_fd();
+    let input_state = libinput.clone();
+
+    unix_fd_add_local(
+        input_fd,
+        gtk::glib::IOCondition::IN
+            | gtk::glib::IOCondition::HUP
+            | gtk::glib::IOCondition::ERR,
+        move |_, _| {
+            let clicked = {
+                let mut libinput = input_state.borrow_mut();
+
+                if let Err(error) = libinput.dispatch() {
+                    eprintln!("Libinput dispatch error: {error}");
+                    return gtk::glib::ControlFlow::Continue;
+                }
+
+                let mut clicked = false;
+
+                for event in &mut *libinput {
+                    // Configure newly added touchpads to enable tap-to-click.
+                    if let Event::Device(DeviceEvent::Added(_)) = &event {
+                        let mut device = event.device();
+
+                        if device.config_tap_finger_count() > 0 {
+                            let result = device.config_tap_set_enabled(true);
+
+                            println!(
+                                "Touchpad tap-to-click configuration for {}: {:?}",
+                                device.name(),
+                                result
+                            );
+                        }
+                    }
+
+                    // Only count actual pointer-button presses.
+                    if let Event::Pointer(PointerEvent::Button(button)) = &event {
+                        if button.button_state() == ButtonState::Pressed
+                            && matches!(button.button(), 0x110 | 0x111 | 0x112)
+                        {
+                            clicked = true;
+                        }
+                    }
+                }
+
+                clicked
+            };
+
+           if clicked {
+    // Capture the click position before delaying dismissal.
+    let (cursor_x, cursor_y) = cursor_pos();
+
+    let dismiss_state = pointer_state.clone();
+
+    // Give GTK time to process clicks on accent buttons.
+    gtk::glib::timeout_add_local_once(
+        Duration::from_millis(50),
+        move || {
+            let popup_rect = {
+                let state = dismiss_state.borrow();
+
+                if state.popup_token.is_some() {
+                    state.popup_rect
+                } else {
+                    None
+                }
+            };
+
+            if let Some((x, y, width, height)) = popup_rect {
+                // Allow a small tolerance for compositor/window boundary differences.
+let tolerance = 12;
+
+let outside =
+    cursor_x < x - tolerance
+    || cursor_x >= x + width + tolerance
+    || cursor_y < y - tolerance
+    || cursor_y >= y + height + tolerance;
+
+                if outside {
+                    let mut state = dismiss_state.borrow_mut();
+
+                    if state.popup_token.is_some() {
+                        state.popup_token = None;
+                        state.popup_key = None;
+                        state.popup_rect = None;
+                        state.window.hide();
+
+                        println!("Popup dismissed by outside click.");
+                    }
+                }
+            }
+        },
+    );
+}
+
+            gtk::glib::ControlFlow::Continue
+        },
+    );
+}
+
+
         // Automatic safety release after 45 seconds.
      /*   let safety_state = state.clone();
      	 let safety_app = app.clone();
@@ -1022,6 +1415,7 @@ match action {
         );
 */
     });
+	
 
     app.run();
 }
